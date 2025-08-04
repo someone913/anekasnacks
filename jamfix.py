@@ -33,6 +33,11 @@ st.markdown("""
     .stApp {
         background-color: #f0f2f6;
     }
+    /* Menambahkan gaya untuk baris total di tabel */
+    .dataframe-row-total {
+        font-weight: bold;
+        background-color: #e9ecef;
+    }
 </style>
 """, unsafe_allow_html=True)
 # --- END: CSS KUSTOM UNTUK MEMPERCANTIK TAMPILAN ---
@@ -141,6 +146,13 @@ def add_new_purchase_item(item, harga, satuan):
         st.warning(f"Item '{item}' sudah ada.")
         return False
 
+# Fungsi untuk mengupdate stok produk jadi
+def update_stok_produk_jadi(item, qty):
+    if item in st.session_state.inventaris['item'].values:
+        st.session_state.inventaris.loc[st.session_state.inventaris['item'] == item, 'qty'] = qty
+        return True
+    return False
+
 # Fungsi untuk reset data
 def reset_data():
     st.session_state.transaksi = pd.DataFrame(columns=['tanggal', 'jenis', 'item', 'qty', 'harga', 'total', 'catatan'])
@@ -227,8 +239,21 @@ if menu == "📊 Dashboard":
         tab1, tab2, tab3 = st.tabs(["Ringkasan Laba", "Penjualan per Produk", "Pembelian per Item"])
         
         with tab1:
-            data_laba = df_transaksi.groupby('tanggal')['total'].sum().reset_index()
-            fig_laba = px.line(data_laba, x='tanggal', y='total', title='Penjualan Harian')
+            df_penjualan_harian = df_transaksi[df_transaksi['jenis'] == 'Penjualan'].groupby('tanggal')['total'].sum().reset_index()
+            df_penjualan_harian.rename(columns={'total': 'Penjualan'}, inplace=True)
+            
+            df_pembelian_harian = df_transaksi[df_transaksi['jenis'] == 'Pembelian'].groupby('tanggal')['total'].sum().reset_index()
+            df_pembelian_harian.rename(columns={'total': 'Pembelian'}, inplace=True)
+            
+            df_gabungan = pd.merge(df_penjualan_harian, df_pembelian_harian, on='tanggal', how='outer').fillna(0)
+            df_gabungan['Laba'] = df_gabungan['Penjualan'] - df_gabungan['Pembelian']
+            
+            fig_laba = go.Figure()
+            fig_laba.add_trace(go.Scatter(x=df_gabungan['tanggal'], y=df_gabungan['Penjualan'], mode='lines+markers', name='Total Penjualan'))
+            fig_laba.add_trace(go.Scatter(x=df_gabungan['tanggal'], y=df_gabungan['Pembelian'], mode='lines+markers', name='Total Pembelian'))
+            fig_laba.update_layout(title='Tren Penjualan vs Pembelian Harian',
+                                   xaxis_title='Tanggal',
+                                   yaxis_title='Jumlah (Rp)')
             st.plotly_chart(fig_laba, use_container_width=True)
             
         with tab2:
@@ -284,7 +309,7 @@ elif menu == "📦 Inventaris (Stok Barang)":
 elif menu == "📝 Input Transaksi":
     st.markdown("## 📝 Input Transaksi")
     
-    tab1, tab2 = st.tabs(["💰 Penjualan", "🛒 Pembelian"])
+    tab1, tab2, tab3 = st.tabs(["💰 Penjualan", "🛒 Pembelian", "📦 Stok Produk Jadi"])
     
     with tab1:
         st.markdown("### 🥨 Penjualan Aneka Snack")
@@ -371,6 +396,26 @@ elif menu == "📝 Input Transaksi":
                 else:
                     st.error("❌ Pilih item dan masukkan jumlah yang valid!")
 
+    with tab3:
+        st.markdown("### 🥨 Update Stok Produk Jadi")
+        st.info("💡 Gunakan fitur ini untuk menginput stok awal atau memperbarui jumlah stok produk jadi secara manual.")
+        
+        with st.form("form_stok_jadi", clear_on_submit=True):
+            produk_stok = st.selectbox("📦 Produk", list(HARGA_JUAL.keys()))
+            
+            # Ambil stok saat ini
+            stok_saat_ini = st.session_state.inventaris[st.session_state.inventaris['item'] == produk_stok]['qty'].iloc[0]
+            st.info(f"Stok **{produk_stok}** saat ini: **{stok_saat_ini:.0f}** pcs.")
+            
+            qty_stok_baru = st.number_input("⚖️ Jumlah Stok Baru (pcs)", min_value=0, step=1)
+            
+            if st.form_submit_button("💾 Update Stok", use_container_width=True):
+                if update_stok_produk_jadi(produk_stok, qty_stok_baru):
+                    st.success(f"✅ Stok produk **{produk_stok}** berhasil diupdate menjadi **{qty_stok_baru}** pcs!")
+                    st.rerun()
+                else:
+                    st.error("❌ Gagal mengupdate stok.")
+
 
 # Jurnal Umum
 elif menu == "📋 Jurnal Umum":
@@ -380,6 +425,7 @@ elif menu == "📋 Jurnal Umum":
         df_jurnal = st.session_state.jurnal.copy()
         df_jurnal['jumlah'] = pd.to_numeric(df_jurnal['jumlah'])
         
+        # Hitung total debit dan kredit
         total_debit = df_jurnal.groupby('debit')['jumlah'].sum().sum()
         total_kredit = df_jurnal.groupby('kredit')['jumlah'].sum().sum()
         
@@ -392,6 +438,14 @@ elif menu == "📋 Jurnal Umum":
         
         st.dataframe(df_display[['Tanggal', 'Keterangan', 'Debit', 'Kredit', 'Jumlah']], 
                     use_container_width=True, hide_index=True)
+
+        # Tampilkan total
+        st.markdown("---")
+        col_debit, col_kredit = st.columns(2)
+        with col_debit:
+            st.metric("Total Debit", f"Rp {total_debit:,.0f}")
+        with col_kredit:
+            st.metric("Total Kredit", f"Rp {total_kredit:,.0f}")
         
         if abs(total_debit - total_kredit) < 0.01:
             st.success("✅ Neraca Jurnal Seimbang! Total Debit = Total Kredit")
@@ -608,7 +662,7 @@ elif menu == "📞 Kontak Kami":
         st.link_button("📸 Instagram", "https://www.instagram.com/ebnu_am", type="secondary", use_container_width=True, help="Follow us on Instagram")
     
     with col2:
-        st.link_button("💬 Telegram", "https://t.me/ebnudoang", type="secondary", use_container_width=True, help="Hubungi kami via Telegram")
+        st.link_button("💬 Telegram", "https://wa.me/ebnudoang", type="secondary", use_container_width=True, help="Telegram")
     
     with col3:
         st.link_button("📧 Email", "mailto:email_anda@email.com", type="secondary", use_container_width=True, help="Kirim email kepada kami")
@@ -620,4 +674,4 @@ elif menu == "📞 Kontak Kami":
         <br>
         **Catatan**: Silakan ganti placeholder `instagram_anda`, `nomor_whatsapp_anda`, `email_anda@email.com`, dan `linkedin_anda` 
         dengan informasi kontak yang sesuai.
-    """, unsafe_allow_html=True)
+    """, unsafe_allow_html=False)
