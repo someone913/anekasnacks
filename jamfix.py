@@ -662,7 +662,7 @@ elif menu == "📞 Kontak Kami":
         st.link_button("📸 Instagram", "https://www.instagram.com/ebnu_am", type="secondary", use_container_width=True, help="Follow us on Instagram")
     
     with col2:
-        st.link_button("💬 Telegram", "https://wa.me/ebnudoang", type="secondary", use_container_width=True, help="Telegram")
+        st.link_button("💬 Telegram", "https://t.me/ebnudoang", type="secondary", use_container_width=True, help="Telegram")
     
     with col3:
         st.link_button("📧 Email", "mailto:email_anda@email.com", type="secondary", use_container_width=True, help="Kirim email kepada kami")
@@ -675,3 +675,4 @@ elif menu == "📞 Kontak Kami":
         **Catatan**: Silakan ganti placeholder `instagram_anda`, `nomor_whatsapp_anda`, `email_anda@email.com`, dan `linkedin_anda` 
         dengan informasi kontak yang sesuai.
     """, unsafe_allow_html=False)
+
