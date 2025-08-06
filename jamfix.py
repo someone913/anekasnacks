@@ -113,16 +113,16 @@ def update_jurnal(tanggal, keterangan, debit, kredit, jumlah):
     new_entry = {'tanggal': tanggal, 'keterangan': keterangan, 'debit': debit, 'kredit': kredit, 'jumlah': jumlah}
     st.session_state.jurnal = pd.concat([st.session_state.jurnal, pd.DataFrame([new_entry])], ignore_index=True)
 
-def tambah_transaksi_penjualan(tanggal, metode_bayar, cart_items):
+# FIX: Logika transaksi diubah agar mendukung metode pembayaran per item
+def tambah_transaksi_penjualan(tanggal, cart_items):
     transaksi_id = str(uuid.uuid4())
-    total_transaksi = 0
 
     for item_data in cart_items:
         item = item_data['item']
         qty = item_data['qty']
         harga = item_data['harga']
+        metode_bayar = item_data['metode_bayar']
         total = qty * harga
-        total_transaksi += total
 
         new_transaksi = {'transaksi_id': transaksi_id, 'tanggal': tanggal, 'jenis': 'Penjualan', 'metode_bayar': metode_bayar, 'item': item, 'qty': qty, 'harga': harga, 'total': total, 'catatan': ''}
         st.session_state.transaksi = pd.concat([st.session_state.transaksi, pd.DataFrame([new_transaksi])], ignore_index=True)
@@ -130,10 +130,14 @@ def tambah_transaksi_penjualan(tanggal, metode_bayar, cart_items):
         if item in st.session_state.inventaris['item'].values:
             st.session_state.inventaris.loc[st.session_state.inventaris['item'] == item, 'qty'] -= qty
     
-    if metode_bayar == 'Tunai':
-        update_jurnal(tanggal, f'Penjualan dengan ID {transaksi_id}', 'Kas', '', total_transaksi)
-    elif metode_bayar == 'Kredit':
-        update_jurnal(tanggal, f'Penjualan Kredit dengan ID {transaksi_id}', 'Piutang Usaha', '', total_transaksi)
+    # Logika Jurnal
+    total_tunai = sum(item['qty'] * item['harga'] for item in cart_items if item['metode_bayar'] == 'Tunai')
+    total_kredit = sum(item['qty'] * item['harga'] for item in cart_items if item['metode_bayar'] == 'Kredit')
+    
+    if total_tunai > 0:
+        update_jurnal(tanggal, f'Penjualan Tunai ID {transaksi_id}', 'Kas', '', total_tunai)
+    if total_kredit > 0:
+        update_jurnal(tanggal, f'Penjualan Kredit ID {transaksi_id}', 'Piutang Usaha', '', total_kredit)
 
     simpan_semua_data()
     st.session_state.cart = []
@@ -170,7 +174,7 @@ def tambah_transaksi_pembelian():
     st.success("Pembelian berhasil dicatat!")
 
 # --- SIDEBAR & NAVIGASI ---
-st.sidebar.image("logo.png", use_column_width=True)
+st.sidebar.image("logo.png", use_container_width=True) # FIX: Menggunakan use_container_width
 st.sidebar.title("Menu Utama")
 menu = st.sidebar.radio("Pilih Menu:", ["Dashboard", "Catat Transaksi", "Inventaris", "Laporan Keuangan", "Pengaturan Harga", "Kontak"])
 
@@ -184,6 +188,21 @@ if password == "admin123": # Ganti "admin" dengan password yang lebih aman di ve
 else:
     st.session_state.is_editor_mode = False
     st.sidebar.warning("Mode Editor Tidak Aktif.")
+
+# Fitur Reset Data (Hanya di mode editor)
+st.sidebar.markdown("---")
+if st.session_state.is_editor_mode:
+    st.sidebar.header("Opsi Admin")
+    if st.sidebar.button("⚠️ Reset Semua Data"):
+        st.warning("Apakah Anda yakin ingin menghapus semua data? Ini tidak dapat diurungkan.")
+        if st.checkbox("Saya yakin ingin menghapus semua data"):
+            st.session_state.transaksi = pd.DataFrame(columns=st.session_state.transaksi.columns)
+            st.session_state.jurnal = pd.DataFrame(columns=st.session_state.jurnal.columns)
+            st.session_state.inventaris = pd.DataFrame(columns=st.session_state.inventaris.columns)
+            st.session_state.harga_jual = {}
+            st.session_state.daftar_pembelian = pd.DataFrame(columns=['item', 'qty', 'satuan', 'harga', 'metode_bayar'])
+            st.session_state.cart = []
+            st.rerun() # FIX: Menggunakan st.rerun()
 
 # --- MENU DASHBOARD ---
 if menu == "Dashboard":
@@ -227,35 +246,48 @@ if menu == "Dashboard":
 # --- MENU CATAT TRANSAKSI (UI KASIR) ---
 elif menu == "Catat Transaksi":
     st.header("📝 Catat Transaksi Penjualan")
-    st.markdown("Pilih produk dan tentukan kuantitasnya, lalu tambahkan ke keranjang. Lakukan pembayaran setelah semua produk ditambahkan.")
+    st.markdown("Pilih produk dan tentukan kuantitasnya, lalu tambahkan ke daftar. Lakukan pembayaran setelah semua produk ditambahkan.")
 
     col1, col2 = st.columns([1, 1])
 
     with col1:
-        st.subheader("Produk & Keranjang")
+        st.subheader("Produk & Daftar Jual")
         item_pos = st.selectbox("Pilih Produk", list(st.session_state.harga_jual.keys()))
         qty_pos = st.number_input("Jumlah (pcs)", min_value=1, step=1)
         
         harga_pos = st.session_state.harga_jual.get(item_pos, 0)
         st.info(f"Harga per item: Rp{harga_pos:,.0f}")
         
-        if st.button("➕ Tambah ke Keranjang"):
-            st.session_state.cart.append({'item': item_pos, 'qty': qty_pos, 'harga': harga_pos})
+        # FIX: Mengubah teks tombol agar lebih sesuai untuk owner
+        if st.button("➕ Tambah Produk"):
+            st.session_state.cart.append({'item': item_pos, 'qty': qty_pos, 'harga': harga_pos, 'metode_bayar': 'Tunai'})
     
     with col2:
         st.subheader("Detail Pembayaran")
-        metode_bayar = st.selectbox("Metode Pembayaran", ['Tunai', 'Kredit'])
-        
         if st.session_state.cart:
             df_cart = pd.DataFrame(st.session_state.cart)
-            df_cart['total'] = df_cart['qty'] * df_cart['harga']
-            st.dataframe(df_cart[['item', 'qty', 'total']].rename(columns={'item':'Produk', 'qty':'Jumlah', 'total':'Subtotal'}), use_container_width=True)
             
-            total_belanja = df_cart['total'].sum()
-            st.markdown(f"### **Total Belanja: Rp{total_belanja:,.0f}**")
+            # FIX: Mengubah logika pembayaran agar bisa terpisah per item
+            edited_df_cart = st.data_editor(
+                df_cart,
+                column_config={
+                    "metode_bayar": st.column_config.SelectboxColumn(
+                        "Metode Pembayaran",
+                        options=['Tunai', 'Kredit'],
+                        required=True
+                    )
+                },
+                use_container_width=True
+            )
+            st.session_state.cart = edited_df_cart.to_dict('records')
+
+            df_cart = pd.DataFrame(st.session_state.cart)
+            df_cart['total'] = df_cart['qty'] * df_cart['harga']
+            
+            st.markdown(f"### **Total Belanja: Rp{df_cart['total'].sum():,.0f}**")
             
             if st.button("Bayar & Simpan Transaksi"):
-                tambah_transaksi_penjualan(date.today(), metode_bayar, st.session_state.cart)
+                tambah_transaksi_penjualan(date.today(), st.session_state.cart)
     
     if st.session_state.last_invoice_id:
         st.markdown("---")
@@ -263,37 +295,35 @@ elif menu == "Catat Transaksi":
         invoice_df = st.session_state.transaksi[st.session_state.transaksi['transaksi_id'] == st.session_state.last_invoice_id]
         if not invoice_df.empty:
             total_invoice = invoice_df['total'].sum()
-            st.markdown(f"""
-            <div class="invoice">
-                <div class="invoice-header">
-                    <h2>Invoice Aneka Snack</h2>
-                    <p>ID Transaksi: {st.session_state.last_invoice_id}</p>
-                    <p>Tanggal: {invoice_df['tanggal'].iloc[0]}</p>
-                    <p>Metode Pembayaran: {invoice_df['metode_bayar'].iloc[0]}</p>
-                </div>
-                <div>
-                    <strong>Items:</strong>
-                    <ul>
-            """, unsafe_allow_html=True)
+            invoice_text = f"""
+Invoice Aneka Snack
+ID Transaksi: {st.session_state.last_invoice_id}
+Tanggal: {invoice_df['tanggal'].iloc[0]}
+Metode Pembayaran: {', '.join(invoice_df['metode_bayar'].unique())}
+----------------------------------------
+Items:
+"""
             for _, row in invoice_df.iterrows():
-                st.markdown(f"""
-                <li class="invoice-item">
-                    <span>{row['item']} ({row['qty']} pcs)</span>
-                    <span>Rp{row['total']:,.0f}</span>
-                </li>
-                """, unsafe_allow_html=True)
-            st.markdown(f"""
-                    </ul>
-                </div>
-                <div class="invoice-total">
-                    Total: Rp{total_invoice:,.0f}
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+                invoice_text += f"{row['item']} ({row['qty']} pcs) - Rp{row['total']:,.0f} ({row['metode_bayar']})\n"
             
+            invoice_text += f"""
+----------------------------------------
+Total: Rp{total_invoice:,.0f}
+"""
+
+            st.text(invoice_text)
+            
+            # FITUR BARU: Tombol Download Invoice
+            st.download_button(
+                label="📥 Download Invoice",
+                data=invoice_text,
+                file_name=f"invoice_{st.session_state.last_invoice_id}.txt",
+                mime="text/plain"
+            )
+
         if st.button("Selesaikan Transaksi Baru"):
             st.session_state.last_invoice_id = None
-            st.experimental_rerun()
+            st.rerun() # FIX: Menggunakan st.rerun()
 
     tab_pembelian = st.tabs(["Catat Pembelian Bahan Baku"])
     with tab_pembelian[0]:
@@ -301,12 +331,29 @@ elif menu == "Catat Transaksi":
         with st.form("form_pembelian"):
             metode_bayar_pembelian = st.selectbox("Metode Pembayaran", ['Tunai', 'Kredit'])
             col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                item_pembelian = st.text_input("Nama Bahan")
+
+            # FIX: Menambahkan dropdown untuk item yang sudah ada
+            bahan_baku_lama = sorted(st.session_state.inventaris['item'].tolist())
+            bahan_baku_pilihan = st.selectbox("Pilih Bahan Baku", ['Tambah Bahan Baru'] + bahan_baku_lama)
+            
+            item_pembelian = ""
+            satuan_pembelian = ""
+
+            if bahan_baku_pilihan == 'Tambah Bahan Baru':
+                with col1:
+                    item_pembelian = st.text_input("Nama Bahan Baru")
+                with col3:
+                    satuan_pembelian = st.text_input("Satuan (kg, liter, dll)")
+            else:
+                item_pembelian = bahan_baku_pilihan
+                satuan_pembelian = st.session_state.inventaris[st.session_state.inventaris['item'] == item_pembelian]['satuan'].iloc[0]
+                with col1:
+                    st.text_input("Nama Bahan", value=item_pembelian, disabled=True)
+                with col3:
+                    st.text_input("Satuan", value=satuan_pembelian, disabled=True)
+
             with col2:
                 qty_pembelian = st.number_input("Jumlah", min_value=1, step=1)
-            with col3:
-                satuan_pembelian = st.text_input("Satuan (kg, liter, dll)")
             with col4:
                 harga_pembelian = st.number_input("Harga Satuan", min_value=0)
             
@@ -345,7 +392,7 @@ elif menu == "Inventaris":
                     st.session_state.inventaris = pd.concat([st.session_state.inventaris, pd.DataFrame([new_item])], ignore_index=True)
                 simpan_semua_data()
                 st.success("Inventaris berhasil diupdate!")
-                st.rerun()
+                st.rerun() # FIX: Menggunakan st.rerun()
     else:
         st.info("Anda harus masuk ke Mode Editor untuk mengubah inventaris.")
 
@@ -428,7 +475,7 @@ elif menu == "Kontak":
         """, unsafe_allow_html=True)
         st.subheader("Instagram")
         st.markdown("""
-            <a href="https://www.instagram.com/ebnudoang/" target="_blank">
+            <a href="https://www.instagram.com/ebnu_am/" target="_blank">
                 <p style="font-size:24px;">📸 Follow me</p>
             </a>
         """, unsafe_allow_html=True)
@@ -437,7 +484,7 @@ elif menu == "Kontak":
         st.subheader("Telegram")
         st.markdown("""
             <a href="https://t.me/ebnudoang" target="_blank">
-                <p style="font-size:24px;">✈️ Telegram</p>
+                <p style="font-size:24px;">✈️ Telegram Channel</p>
             </a>
         """, unsafe_allow_html=True)
         st.subheader("LinkedIn")
@@ -446,5 +493,3 @@ elif menu == "Kontak":
                 <p style="font-size:24px;">💼 LinkedIn Page</p>
             </a>
         """, unsafe_allow_html=True)
-
-
