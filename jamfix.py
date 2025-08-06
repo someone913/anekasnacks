@@ -13,7 +13,7 @@ try:
     gc = gspread.service_account_from_dict(st.secrets["gspread_service_account"])
     
     # GANTI DENGAN URL SPREADSHEET ANDA DI SINI
-    spreadsheet_url = "https://docs.google.com/spreadsheets/d/1rStEc9ROb-L7v4P4nd1J6S0jCKloC5Wf/edit?gid=1870397462#gid=1870397462"
+    spreadsheet_url = "https://docs.google.com/spreadsheets/d/1rStEc9ROb-L7v4P4nd1J6S0jCKloC5Wf/edit"
     
     sh = gc.open_by_url(spreadsheet_url)
 
@@ -449,4 +449,5 @@ elif menu == "Kontak":
         st.markdown("[Telegram Channel](https://t.me/)")
         st.subheader("LinkedIn")
         st.markdown("[LinkedIn Page](https://www.linkedin.com/company/AnekaSnack)")
+
 
