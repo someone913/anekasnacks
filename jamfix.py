@@ -451,3 +451,4 @@ elif menu == "Kontak":
         st.markdown("[LinkedIn Page](https://www.linkedin.com/company/AnekaSnack)")
 
 
+
