@@ -3,676 +3,449 @@ import pandas as pd
 from datetime import datetime, date
 import plotly.express as px
 import plotly.graph_objects as go
+import gspread
+from gspread_dataframe import set_with_dataframe, get_as_dataframe
+import json
+import uuid
 
-# --- START: MODIFIKASI UNTUK ANEKA SNACK ---
+# --- START: KONFIGURASI GOOGLE SHEETS ---
+try:
+    gc = gspread.service_account_from_dict(st.secrets["gspread_service_account"])
+    
+    # GANTI DENGAN URL SPREADSHEET ANDA DI SINI
+    spreadsheet_url = "https://docs.google.com/spreadsheets/d/1rStEc9ROb-L7v4P4nd1J6S0jCKloC5Wf/edit?gid=1870397462#gid=1870397462"
+    
+    sh = gc.open_by_url(spreadsheet_url)
 
-# Konfigurasi halaman
+except Exception as e:
+    st.error(f"❌ Gagal terhubung ke Google Sheets: Pastikan 'gspread_service_account' dan URL spreadsheet sudah benar.")
+    st.stop()
+# --- END: KONFIGURASI GOOGLE SHEETS ---
+
+# --- KONFIGURASI APLIKASI & CSS KUSTOM ---
 st.set_page_config(
-    page_title="Pencatatan Keuangan - Aneka Snack",
+    page_title="Aplikasi Keuangan Aneka Snack",
     page_icon="🥨",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# --- START: CSS KUSTOM UNTUK MEMPERCANTIK TAMPILAN ---
 st.markdown("""
 <style>
-    .css-1d391kg {
-        width: 300px; /* Ukuran lebar sidebar */
+    /* Mengatur font dan warna dasar */
+    body {
+        font-family: 'Noto Sans', sans-serif;
+        font-size: 1.2em;
     }
-    .css-1e5z83c {
-        width: 300px; /* Ukuran lebar sidebar untuk tampilan mobile */
+    h1, h2, h3, h4 {
+        font-family: 'Merriweather', serif;
+        color: #005a9c;
     }
-    .st-emotion-cache-1pxazr7 {
-        font-size: 1.5rem; /* Ukuran font judul menu */
+    .stButton>button {
+        width: 100%;
+        background-color: #4CAF50;
+        color: white;
+        font-size: 1.2em;
+        padding: 10px;
+        border-radius: 8px;
     }
-    .st-emotion-cache-q824a1 {
-        font-size: 1.2rem; /* Ukuran font item menu */
+    .stTextInput>div>div>input, .stSelectbox>div>div>div, .stNumberInput>div>div>input {
+        font-size: 1.2em;
+        padding: 0.5rem;
     }
-    /* Mengatur warna latar belakang halaman utama */
-    .stApp {
-        background-color: #f0f2f6;
+    .stMetric>div>div {
+        font-size: 1.5em;
     }
-    /* Menambahkan gaya untuk baris total di tabel */
-    .dataframe-row-total {
+    .st-emotion-cache-1px5q9x {
+        padding: 2rem 1rem;
+    }
+    .st-emotion-cache-10o4965 {
+        font-size: 1.5em;
+    }
+    .invoice {
+        border: 2px solid #ddd;
+        padding: 20px;
+        border-radius: 10px;
+        background-color: #f9f9f9;
+        margin-top: 20px;
+    }
+    .invoice-header {
+        text-align: center;
+        border-bottom: 2px dashed #ddd;
+        padding-bottom: 10px;
+        margin-bottom: 20px;
+    }
+    .invoice-item {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 5px;
+    }
+    .invoice-total {
+        font-size: 1.5em;
         font-weight: bold;
-        background-color: #e9ecef;
+        text-align: right;
+        margin-top: 20px;
+        border-top: 2px dashed #ddd;
+        padding-top: 10px;
     }
 </style>
 """, unsafe_allow_html=True)
-# --- END: CSS KUSTOM UNTUK MEMPERCANTIK TAMPILAN ---
 
-# Header utama
-st.title("🥨 Aneka Snack")
-
-# Konstanta harga jual (tetap statis)
-HARGA_JUAL = {
-    "Keripik Kue Bawang Rasa Original": 20000,
-    "Keripik Kue Bawang Rasa Kelor": 22000,
-    "Keripik Kue Bawang Rasa Jagung": 22000,
-    "Keripik Kue Bawang Rasa Buah Naga": 23000,
-    "Keripik Kenikir": 25000
-}
-
-# --- END: MODIFIKASI UNTUK ANEKA SNACK ---
-
-# --- START: INISIALISASI DATA MENGGUNAKAN SESSION STATE (PENGGANTI DATABASE) ---
-def init_data():
-    if "transaksi" not in st.session_state:
-        st.session_state.transaksi = pd.DataFrame(columns=['tanggal', 'jenis', 'item', 'qty', 'harga', 'total', 'catatan'])
-    
-    if "jurnal" not in st.session_state:
-        st.session_state.jurnal = pd.DataFrame(columns=['tanggal', 'keterangan', 'debit', 'kredit', 'jumlah'])
-
-    if "inventaris" not in st.session_state:
-        st.session_state.inventaris = pd.DataFrame({
-            'item': [
-                "Keripik Kue Bawang Rasa Original", "Keripik Kue Bawang Rasa Kelor",
-                "Keripik Kue Bawang Rasa Jagung", "Keripik Kue Bawang Rasa Buah Naga",
-                "Keripik Kenikir", "Tepung Terigu", "Tepung Beras", "Telur",
-                "Minyak Goreng", "Mentega", "Bumbu", "Daun Kenikir",
-                "Daun Kelor", "Jagung", "Buah Naga", "Plastik Kemasan"
-            ],
-            'qty': [0.0] * 16,
-            'satuan': [
-                "pcs", "pcs", "pcs", "pcs", "pcs", "kg", "kg", "kg",
-                "lt", "kg", "gr", "kg", "kg", "kg", "kg", "pcs"
-            ]
-        })
+# --- FUNGSI UTAMA ---
+@st.cache_data(ttl=60)
+def init_data_from_gsheets():
+    try:
+        ws_transaksi = sh.worksheet("transaksi")
+        df_transaksi = get_as_dataframe(ws_transaksi).dropna(how='all')
+        df_transaksi['tanggal'] = pd.to_datetime(df_transaksi['tanggal'], errors='coerce').dt.date
         
-    if "daftar_pembelian" not in st.session_state:
-        st.session_state.daftar_pembelian = pd.DataFrame({
-            'item': [
-                "Tepung Terigu", "Tepung Beras", "Telur", "Minyak Goreng",
-                "Mentega", "Bumbu", "Daun Kenikir", "Daun Kelor",
-                "Jagung", "Buah Naga", "Plastik Kemasan"
-            ],
-            'harga_standar': [
-                12000, 10000, 30000, 15000, 18000, 50000,
-                10000, 15000, 12000, 20000, 5000
-            ],
-            'satuan': [
-                "kg", "kg", "kg", "lt", "kg", "gr",
-                "kg", "kg", "kg", "kg", "pcs"
-            ]
-        })
+        ws_jurnal = sh.worksheet("jurnal")
+        df_jurnal = get_as_dataframe(ws_jurnal).dropna(how='all')
+        df_jurnal['tanggal'] = pd.to_datetime(df_jurnal['tanggal'], errors='coerce').dt.date
+        
+        ws_inventaris = sh.worksheet("inventaris")
+        df_inventaris = get_as_dataframe(ws_inventaris).dropna(how='all')
 
-init_data()
+        ws_settings = sh.worksheet("settings")
+        df_settings = get_as_dataframe(ws_settings).dropna(how='all')
+        harga_jual_json_str = df_settings[df_settings['key'] == 'harga_jual_json']['value'].iloc[0]
+        harga_jual = json.loads(harga_jual_json_str)
+        
+        return df_transaksi, df_jurnal, df_inventaris, harga_jual
 
-# Fungsi untuk menyimpan transaksi
-def simpan_transaksi(tanggal, jenis, item, qty, harga, catatan=""):
-    total = qty * harga
-    new_transaksi = pd.DataFrame([{
-        'tanggal': tanggal, 'jenis': jenis, 'item': item, 'qty': qty,
-        'harga': harga, 'total': total, 'catatan': catatan
-    }])
-    st.session_state.transaksi = pd.concat([st.session_state.transaksi, new_transaksi], ignore_index=True)
+    except gspread.exceptions.WorksheetNotFound as e:
+        st.error(f"❌ Sheet tidak ditemukan: {e}. Pastikan nama sheet sudah benar.")
+        st.stop()
+    except Exception as e:
+        st.error(f"❌ Terjadi kesalahan saat membaca data: {e}")
+        st.stop()
 
-    # Perbarui stok
-    if item in st.session_state.inventaris['item'].values:
-        if jenis == 'Penjualan':
-            st.session_state.inventaris.loc[st.session_state.inventaris['item'] == item, 'qty'] -= qty
-        elif jenis == 'Pembelian':
+def simpan_semua_data():
+    try:
+        set_with_dataframe(sh.worksheet("transaksi"), st.session_state.transaksi)
+        set_with_dataframe(sh.worksheet("jurnal"), st.session_state.jurnal)
+        set_with_dataframe(sh.worksheet("inventaris"), st.session_state.inventaris)
+        set_with_dataframe(sh.worksheet("settings"), pd.DataFrame(
+            [{'key': 'harga_jual_json', 'value': json.dumps(st.session_state.harga_jual)}]
+        ))
+        st.success("✅ Semua data berhasil disimpan ke Google Sheets!")
+    except Exception as e:
+        st.error(f"❌ Gagal menyimpan data ke Google Sheets: {e}")
+
+def update_jurnal(tanggal, keterangan, debit, kredit, jumlah):
+    new_entry = {'tanggal': tanggal, 'keterangan': keterangan, 'debit': debit, 'kredit': kredit, 'jumlah': jumlah}
+    st.session_state.jurnal = pd.concat([st.session_state.jurnal, pd.DataFrame([new_entry])], ignore_index=True)
+
+def tambah_transaksi_penjualan(tanggal, metode_bayar, cart_items):
+    transaksi_id = str(uuid.uuid4())
+    total_transaksi = 0
+
+    for item_data in cart_items:
+        item = item_data['item']
+        qty = item_data['qty']
+        harga = item_data['harga']
+        total = qty * harga
+        total_transaksi += total
+
+        new_transaksi = {'transaksi_id': transaksi_id, 'tanggal': tanggal, 'jenis': 'Penjualan', 'metode_bayar': metode_bayar, 'item': item, 'qty': qty, 'harga': harga, 'total': total, 'catatan': ''}
+        st.session_state.transaksi = pd.concat([st.session_state.transaksi, pd.DataFrame([new_transaksi])], ignore_index=True)
+
+        st.session_state.inventaris.loc[st.session_state.inventaris['item'] == item, 'qty'] -= qty
+    
+    if metode_bayar == 'Tunai':
+        update_jurnal(tanggal, f'Penjualan dengan ID {transaksi_id}', 'Kas', '', total_transaksi)
+    elif metode_bayar == 'Kredit':
+        update_jurnal(tanggal, f'Penjualan Kredit dengan ID {transaksi_id}', 'Piutang Usaha', '', total_transaksi)
+
+    simpan_semua_data()
+    st.session_state.cart = []
+    st.balloons()
+    st.session_state.last_invoice_id = transaksi_id
+    st.success("Transaksi Penjualan berhasil dicatat!")
+
+def tambah_transaksi_pembelian():
+    for index, row in st.session_state.daftar_pembelian.iterrows():
+        item = row['item']
+        qty = row['qty']
+        harga = row['harga']
+        satuan = row['satuan']
+        metode_bayar_pembelian = row['metode_bayar']
+        total_harga = qty * harga
+
+        new_transaksi = {'transaksi_id': '', 'tanggal': date.today(), 'jenis': 'Pembelian', 'metode_bayar': metode_bayar_pembelian, 'item': item, 'qty': qty, 'harga': harga, 'total': total_harga, 'catatan': ''}
+        st.session_state.transaksi = pd.concat([st.session_state.transaksi, pd.DataFrame([new_transaksi])], ignore_index=True)
+        
+        if metode_bayar_pembelian == 'Tunai':
+            update_jurnal(date.today(), f'Pembelian {qty} {satuan} {item}', 'Bahan Baku', 'Kas', total_harga)
+        elif metode_bayar_pembelian == 'Kredit':
+            update_jurnal(date.today(), f'Pembelian Kredit {qty} {satuan} {item}', 'Bahan Baku', 'Utang Usaha', total_harga)
+
+        if item in st.session_state.inventaris['item'].values:
             st.session_state.inventaris.loc[st.session_state.inventaris['item'] == item, 'qty'] += qty
-    
-    # Simpan ke jurnal
-    if jenis == 'Penjualan':
-        keterangan = f'Penjualan {item}'
-        debit = 'Kas'
-        kredit = 'Pendapatan Penjualan'
-        jumlah = total
-    else:  # Pembelian
-        keterangan = f'Beli {item}'
-        debit = f"Biaya Pembelian {item}"
-        kredit = 'Kas'
-        jumlah = total
-    
-    new_jurnal = pd.DataFrame([{
-        'tanggal': tanggal, 'keterangan': keterangan, 'debit': debit,
-        'kredit': kredit, 'jumlah': jumlah
-    }])
-    st.session_state.jurnal = pd.concat([st.session_state.jurnal, new_jurnal], ignore_index=True)
-    
-# Fungsi untuk menambahkan item pembelian baru
-def add_new_purchase_item(item, harga, satuan):
-    if item not in st.session_state.daftar_pembelian['item'].values:
-        new_item_beli = pd.DataFrame([{'item': item, 'harga_standar': harga, 'satuan': satuan}])
-        st.session_state.daftar_pembelian = pd.concat([st.session_state.daftar_pembelian, new_item_beli], ignore_index=True)
-        
-        new_item_inventaris = pd.DataFrame([{'item': item, 'qty': 0.0, 'satuan': satuan}])
-        st.session_state.inventaris = pd.concat([st.session_state.inventaris, new_item_inventaris], ignore_index=True)
-        return True
-    else:
-        st.warning(f"Item '{item}' sudah ada.")
-        return False
-
-# Fungsi untuk mengupdate stok produk jadi
-def update_stok_produk_jadi(item, qty):
-    if item in st.session_state.inventaris['item'].values:
-        st.session_state.inventaris.loc[st.session_state.inventaris['item'] == item, 'qty'] = qty
-        return True
-    return False
-
-# Fungsi untuk reset data
-def reset_data():
-    st.session_state.transaksi = pd.DataFrame(columns=['tanggal', 'jenis', 'item', 'qty', 'harga', 'total', 'catatan'])
-    st.session_state.jurnal = pd.DataFrame(columns=['tanggal', 'keterangan', 'debit', 'kredit', 'jumlah'])
-    st.session_state.inventaris['qty'] = 0.0
-    st.session_state.inventaris['qty'] = st.session_state.inventaris['qty'].astype(float) # Pastikan tipe data tetap float
-    
-# --- END: INISIALISASI DATA MENGGUNAKAN SESSION STATE (PENGGANTI DATABASE) ---
-
-# --- START: LOGIKA UNTUK MODE EDITOR ---
-EDITOR_PASSWORD = "Ebnu913" # GANTI DENGAN KATA SANDI YANG AMAN
-
-if "editor_mode" not in st.session_state:
-    st.session_state.editor_mode = False
-
-with st.sidebar:
-    st.markdown("### 🔒 Mode Editor")
-    password = st.text_input("Masukkan Kata Sandi", type="password", help="Hanya untuk editor")
-    if st.button("Masuk"):
-        if password == EDITOR_PASSWORD:
-            st.session_state.editor_mode = True
-            st.success("✅ Mode Editor diaktifkan!")
-            st.rerun()
         else:
-            st.session_state.editor_mode = False
-            st.error("❌ Kata sandi salah!")
-    
-    if st.session_state.editor_mode:
-        if st.button("Keluar dari Mode Editor"):
-            st.session_state.editor_mode = False
-            st.rerun()
+            new_item = {'item': item, 'qty': qty, 'satuan': satuan}
+            st.session_state.inventaris = pd.concat([st.session_state.inventaris, pd.DataFrame([new_item])], ignore_index=True)
 
-    st.markdown("### Menu")
-    
-    menu_options_public = [
-        "📊 Dashboard",
-        "📦 Inventaris (Stok Barang)",
-        "📋 Jurnal Umum",
-        "📈 Laporan Keuangan",
-        "⚖️ Neraca Saldo",
-        "📞 Kontak Kami"
-    ]
-    
-    menu_options_editor = []
-    if st.session_state.editor_mode:
-        menu_options_editor = [
-            "📝 Input Transaksi",
-            "🗑️ Reset Data"
-        ]
-        
-    menu = st.radio("", menu_options_public + menu_options_editor)
+    st.session_state.daftar_pembelian = pd.DataFrame(columns=['item', 'qty', 'satuan', 'harga', 'metode_bayar'])
+    simpan_semua_data()
+    st.balloons()
+    st.success("Pembelian berhasil dicatat!")
 
-# --- END: LOGIKA UNTUK MODE EDITOR ---
+# --- MUAT DATA KE SESSION_STATE ---
+if "transaksi" not in st.session_state:
+    st.session_state.transaksi, st.session_state.jurnal, st.session_state.inventaris, st.session_state.harga_jual = init_data_from_gsheets()
+    st.session_state.daftar_pembelian = pd.DataFrame(columns=['item', 'qty', 'satuan', 'harga', 'metode_bayar'])
+    st.session_state.cart = []
+    st.session_state.last_invoice_id = None
 
+# --- SIDEBAR & NAVIGASI ---
+st.sidebar.image("unnamed (2) (1).jpg", use_column_width=True)
+st.sidebar.title("Menu Utama")
+menu = st.sidebar.radio("Pilih Menu:", ["Dashboard", "Catat Transaksi", "Inventaris", "Laporan Keuangan", "Pengaturan Harga", "Kontak"])
 
-# Dashboard
-if menu == "📊 Dashboard":
-    st.markdown("## 📊 Dashboard Keuangan")
+# --- MENU DASHBOARD ---
+if menu == "Dashboard":
+    st.header("📊 Dashboard Keuangan")
+    st.markdown("Ringkasan cepat performa bisnis Anda.")
     
-    if not st.session_state.transaksi.empty:
-        df_transaksi = st.session_state.transaksi
-        df_transaksi['total'] = pd.to_numeric(df_transaksi['total'])
+    df_penjualan = st.session_state.transaksi[st.session_state.transaksi['jenis'] == 'Penjualan']
+    df_biaya_pembelian = st.session_state.transaksi[st.session_state.transaksi['jenis'] == 'Pembelian']
+    
+    total_penjualan = df_penjualan['total'].sum()
+    total_biaya = df_biaya_pembelian['total'].sum()
+    laba_bersih = total_penjualan - total_biaya
+    
+    col_dash1, col_dash2, col_dash3 = st.columns(3)
+    with col_dash1:
+        st.metric(label="Total Penjualan", value=f"Rp{total_penjualan:,.0f}")
+    with col_dash2:
+        st.metric(label="Total Biaya", value=f"Rp{total_biaya:,.0f}")
+    with col_dash3:
+        st.metric(label="Laba Bersih", value=f"Rp{laba_bersih:,.0f}")
         
-        total_penjualan = df_transaksi[df_transaksi['jenis'] == 'Penjualan']['total'].sum()
-        total_pembelian = df_transaksi[df_transaksi['jenis'] == 'Pembelian']['total'].sum()
-        laba_rugi = total_penjualan - total_pembelian
-        
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.metric(label="💰 Total Penjualan", value=f"Rp {total_penjualan:,.0f}")
-        
-        with col2:
-            st.metric(label="🛒 Total Pembelian", value=f"Rp {total_pembelian:,.0f}")
-        
-        with col3:
-            st.metric(label="📈 Laba/Rugi", value=f"Rp {laba_rugi:,.0f}")
-        
-        with col4:
-            st.metric(label="📝 Total Transaksi", value=f"{len(df_transaksi)} transaksi")
-        
-        st.markdown("### 📊 Visualisasi")
-        
-        tab1, tab2, tab3 = st.tabs(["Ringkasan Laba", "Penjualan per Produk", "Pembelian per Item"])
-        
-        with tab1:
-            df_penjualan_harian = df_transaksi[df_transaksi['jenis'] == 'Penjualan'].groupby('tanggal')['total'].sum().reset_index()
-            df_penjualan_harian.rename(columns={'total': 'Penjualan'}, inplace=True)
-            
-            df_pembelian_harian = df_transaksi[df_transaksi['jenis'] == 'Pembelian'].groupby('tanggal')['total'].sum().reset_index()
-            df_pembelian_harian.rename(columns={'total': 'Pembelian'}, inplace=True)
-            
-            df_gabungan = pd.merge(df_penjualan_harian, df_pembelian_harian, on='tanggal', how='outer').fillna(0)
-            df_gabungan['Laba'] = df_gabungan['Penjualan'] - df_gabungan['Pembelian']
-            
-            fig_laba = go.Figure()
-            fig_laba.add_trace(go.Scatter(x=df_gabungan['tanggal'], y=df_gabungan['Penjualan'], mode='lines+markers', name='Total Penjualan'))
-            fig_laba.add_trace(go.Scatter(x=df_gabungan['tanggal'], y=df_gabungan['Pembelian'], mode='lines+markers', name='Total Pembelian'))
-            fig_laba.update_layout(title='Tren Penjualan vs Pembelian Harian',
-                                   xaxis_title='Tanggal',
-                                   yaxis_title='Jumlah (Rp)')
-            st.plotly_chart(fig_laba, use_container_width=True)
-            
-        with tab2:
-            df_penjualan = df_transaksi[df_transaksi['jenis'] == 'Penjualan']
-            if not df_penjualan.empty:
-                penjualan_per_produk = df_penjualan.groupby('item')['qty'].sum().reset_index()
-                fig_produk = px.bar(penjualan_per_produk, x='item', y='qty', title='Jumlah Produk Terjual')
-                st.plotly_chart(fig_produk, use_container_width=True)
-            else:
-                st.info("📝 Belum ada data penjualan.")
-        
-        with tab3:
-            df_pembelian = df_transaksi[df_transaksi['jenis'] == 'Pembelian']
-            if not df_pembelian.empty:
-                pembelian_per_item = df_pembelian.groupby('item')['total'].sum().reset_index()
-                fig_item = px.pie(pembelian_per_item, values='total', names='item', title='Komposisi Biaya Pembelian')
-                st.plotly_chart(fig_item, use_container_width=True)
-            else:
-                st.info("📝 Belum ada data pembelian.")
-        
-        st.markdown("### 📋 Transaksi Terbaru")
-        df_terbaru = df_transaksi.sort_values('tanggal', ascending=False).head(5)
-        df_display = df_terbaru[['tanggal', 'jenis', 'item', 'qty', 'total']].copy()
-        df_display['total'] = df_display['total'].apply(lambda x: f"Rp {x:,.0f}")
-        st.dataframe(df_display, use_container_width=True, hide_index=True)
-        
+    st.markdown("---")
+    
+    st.write("### Tren Penjualan Bulanan")
+    if not df_penjualan.empty:
+        df_penjualan['bulan'] = df_penjualan['tanggal'].apply(lambda x: x.strftime('%Y-%m'))
+        df_tren_penjualan = df_penjualan.groupby('bulan')['total'].sum().reset_index()
+        fig_tren = px.bar(df_tren_penjualan, x='bulan', y='total', title='Tren Penjualan dari Waktu ke Waktu')
+        st.plotly_chart(fig_tren, use_container_width=True)
     else:
-        st.info("📝 Belum ada transaksi. Mulai dengan menambah transaksi di menu 'Input Transaksi'.")
-
-# Inventaris
-elif menu == "📦 Inventaris (Stok Barang)":
-    st.markdown("## 📦 Inventaris (Stok Barang)")
+        st.info("Tidak ada data penjualan untuk ditampilkan.")
     
-    if not st.session_state.inventaris.empty:
-        df_inventaris_display = st.session_state.inventaris[['item', 'qty', 'satuan']].copy()
-        df_inventaris_display.columns = ['Nama Item', 'Jumlah Stok', 'Satuan']
-        
-        # Tampilkan produk jual
-        st.markdown("### Stok Produk Jual")
-        df_produk_jual = df_inventaris_display[df_inventaris_display['Nama Item'].isin(HARGA_JUAL.keys())]
-        st.dataframe(df_produk_jual, use_container_width=True, hide_index=True)
-        
-        # Tampilkan bahan baku
-        st.markdown("### Stok Bahan Baku")
-        items_beli = st.session_state.daftar_pembelian['item'].tolist()
-        df_bahan_baku = df_inventaris_display[df_inventaris_display['Nama Item'].isin(items_beli)]
-        st.dataframe(df_bahan_baku, use_container_width=True, hide_index=True)
-        
+    st.write("### Penjualan Berdasarkan Produk")
+    if not df_penjualan.empty:
+        df_penjualan_per_produk = df_penjualan.groupby('item')['qty'].sum().reset_index()
+        fig_pie = px.pie(df_penjualan_per_produk, values='qty', names='item', title='Distribusi Penjualan Produk')
+        st.plotly_chart(fig_pie, use_container_width=True)
     else:
-        st.info("📝 Belum ada data inventaris.")
+        st.info("Tidak ada data penjualan untuk ditampilkan.")
 
-# Input Transaksi
-elif menu == "📝 Input Transaksi":
-    st.markdown("## 📝 Input Transaksi")
-    
-    tab1, tab2, tab3 = st.tabs(["💰 Penjualan", "🛒 Pembelian", "📦 Stok Produk Jadi"])
-    
-    with tab1:
-        st.markdown("### 🥨 Penjualan Aneka Snack")
+# --- MENU CATAT TRANSAKSI (UI KASIR) ---
+elif menu == "Catat Transaksi":
+    st.header("📝 Catat Transaksi Penjualan")
+    st.markdown("Pilih produk dan tentukan kuantitasnya, lalu tambahkan ke keranjang. Lakukan pembayaran setelah semua produk ditambahkan.")
+
+    col1, col2 = st.columns([1, 1])
+
+    with col1:
+        st.subheader("Produk & Keranjang")
+        item_pos = st.selectbox("Pilih Produk", list(st.session_state.harga_jual.keys()))
+        qty_pos = st.number_input("Jumlah (pcs)", min_value=1, step=1)
         
-        with st.form("form_penjualan", clear_on_submit=True):
-            produk_terjual = st.selectbox("📦 Produk", list(HARGA_JUAL.keys()))
+        harga_pos = st.session_state.harga_jual.get(item_pos, 0)
+        st.info(f"Harga per item: Rp{harga_pos:,.0f}")
+        
+        if st.button("➕ Tambah ke Keranjang"):
+            st.session_state.cart.append({'item': item_pos, 'qty': qty_pos, 'harga': harga_pos})
+    
+    with col2:
+        st.subheader("Detail Pembayaran")
+        metode_bayar = st.selectbox("Metode Pembayaran", ['Tunai', 'Kredit'])
+        
+        if st.session_state.cart:
+            df_cart = pd.DataFrame(st.session_state.cart)
+            df_cart['total'] = df_cart['qty'] * df_cart['harga']
+            st.dataframe(df_cart[['item', 'qty', 'total']].rename(columns={'item':'Produk', 'qty':'Jumlah', 'total':'Subtotal'}), use_container_width=True)
             
-            col1, col2 = st.columns(2)
+            total_belanja = df_cart['total'].sum()
+            st.markdown(f"### **Total Belanja: Rp{total_belanja:,.0f}**")
             
+            if st.button("Bayar & Simpan Transaksi"):
+                tambah_transaksi_penjualan(date.today(), metode_bayar, st.session_state.cart)
+    
+    if st.session_state.last_invoice_id:
+        st.markdown("---")
+        st.header("🧾 Invoice Terakhir")
+        invoice_df = st.session_state.transaksi[st.session_state.transaksi['transaksi_id'] == st.session_state.last_invoice_id]
+        if not invoice_df.empty:
+            total_invoice = invoice_df['total'].sum()
+            st.markdown(f"""
+            <div class="invoice">
+                <div class="invoice-header">
+                    <h2>Invoice Aneka Snack</h2>
+                    <p>ID Transaksi: {st.session_state.last_invoice_id}</p>
+                    <p>Tanggal: {invoice_df['tanggal'].iloc[0]}</p>
+                    <p>Metode Pembayaran: {invoice_df['metode_bayar'].iloc[0]}</p>
+                </div>
+                <div>
+                    <strong>Items:</strong>
+                    <ul>
+            """, unsafe_allow_html=True)
+            for _, row in invoice_df.iterrows():
+                st.markdown(f"""
+                <li class="invoice-item">
+                    <span>{row['item']} ({row['qty']} pcs)</span>
+                    <span>Rp{row['total']:,.0f}</span>
+                </li>
+                """, unsafe_allow_html=True)
+            st.markdown(f"""
+                    </ul>
+                </div>
+                <div class="invoice-total">
+                    Total: Rp{total_invoice:,.0f}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+        if st.button("Selesaikan Transaksi Baru"):
+            st.session_state.last_invoice_id = None
+            st.experimental_rerun()
+
+    tab_pembelian = st.tabs(["Catat Pembelian Bahan Baku"])
+    with tab_pembelian[0]:
+        st.subheader("🛒 Catat Pembelian Bahan Baku")
+        with st.form("form_pembelian"):
+            metode_bayar_pembelian = st.selectbox("Metode Pembayaran", ['Tunai', 'Kredit'])
+            col1, col2, col3, col4 = st.columns(4)
             with col1:
-                tgl_jual = st.date_input("📅 Tanggal", value=date.today())
-                qty_jual = st.number_input("⚖️ Jumlah (pcs)", min_value=0, step=1)
-            
+                item_pembelian = st.text_input("Nama Bahan")
             with col2:
-                harga_jual_satuan = HARGA_JUAL[produk_terjual]
-                st.markdown(f"**💰 Harga**: Rp {harga_jual_satuan:,}/pcs")
-                if qty_jual > 0:
-                    total_jual = qty_jual * harga_jual_satuan
-                    st.markdown(f"**🧮 Total**: Rp {total_jual:,.0f}")
-                else:
-                    st.markdown("**🧮 Total**: Rp 0")
+                qty_pembelian = st.number_input("Jumlah", min_value=1, step=1)
+            with col3:
+                satuan_pembelian = st.text_input("Satuan (kg, liter, dll)")
+            with col4:
+                harga_pembelian = st.number_input("Harga Satuan", min_value=0)
             
-            catatan_jual = st.text_input("📝 Catatan (opsional)")
-            
-            if st.form_submit_button("💾 Simpan Penjualan", use_container_width=True):
-                if qty_jual > 0:
-                    simpan_transaksi(tgl_jual, "Penjualan", produk_terjual, qty_jual, harga_jual_satuan, catatan_jual)
-                    st.success(f"✅ Penjualan {produk_terjual} berhasil disimpan!")
-                    st.rerun()
+            if st.form_submit_button("Tambahkan ke Daftar"):
+                if item_pembelian and satuan_pembelian:
+                    new_row = pd.DataFrame([{'item': item_pembelian, 'qty': qty_pembelian, 'satuan': satuan_pembelian, 'harga': harga_pembelian, 'metode_bayar': metode_bayar_pembelian}])
+                    st.session_state.daftar_pembelian = pd.concat([st.session_state.daftar_pembelian, new_row], ignore_index=True)
                 else:
-                    st.error("❌ Masukkan jumlah yang valid!")
-    
-    with tab2:
-        st.markdown("### 🛒 Pembelian")
-        
-        df_daftar_beli = st.session_state.daftar_pembelian
-        bahan_list = df_daftar_beli['item'].tolist()
-        bahan_list.insert(0, "-- Pilih Item --")
-        bahan_list.append("Tambah Item Baru")
+                    st.warning("Nama bahan dan satuan tidak boleh kosong!")
 
-        with st.form("form_pembelian", clear_on_submit=True):
-            bahan_baku = st.selectbox("📦 Item Pembelian", bahan_list)
+        if not st.session_state.daftar_pembelian.empty:
+            st.subheader("Daftar Pembelian Hari Ini")
+            st.dataframe(st.session_state.daftar_pembelian, use_container_width=True)
+            total_pembelian = (st.session_state.daftar_pembelian['qty'] * st.session_state.daftar_pembelian['harga']).sum()
+            st.info(f"**Total Pembelian: Rp{total_pembelian:,.0f}**")
             
-            item_pembelian = ""
-            harga_satuan_pembelian = 0
-            satuan_pembelian = ""
-            
-            if bahan_baku == "Tambah Item Baru":
-                st.markdown("---")
-                st.markdown("#### Tambah Item Pembelian Baru")
-                item_pembelian = st.text_input("📝 Nama Item")
-                col1, col2 = st.columns(2)
-                with col1:
-                    harga_satuan_pembelian = st.number_input("💰 Harga Satuan", min_value=0)
-                with col2:
-                    satuan_pembelian = st.text_input("⚖️ Satuan", help="Contoh: kg, pcs, gr")
-                st.markdown("---")
+            if st.button("Selesai & Simpan Pembelian"):
+                tambah_transaksi_pembelian()
+
+# --- MENU INVENTARIS ---
+elif menu == "Inventaris":
+    st.header("📦 Inventaris Produk & Bahan Baku")
+    st.dataframe(st.session_state.inventaris, use_container_width=True)
+    st.markdown("---")
+    st.write("### Tambah/Edit Stok Inventaris")
+    with st.form("form_inventaris"):
+        item_inv = st.text_input("Nama Item", "Keripik Kenikir")
+        qty_inv = st.number_input("Jumlah Stok", min_value=0, step=1)
+        satuan_inv = st.text_input("Satuan", "pcs")
+        if st.form_submit_button("Update Inventaris"):
+            if item_inv in st.session_state.inventaris['item'].values:
+                st.session_state.inventaris.loc[st.session_state.inventaris['item'] == item_inv, ['qty', 'satuan']] = [qty_inv, satuan_inv]
             else:
-                item_pembelian = bahan_baku
-                if bahan_baku != "-- Pilih Item --":
-                    harga_satuan_pembelian = df_daftar_beli[df_daftar_beli['item'] == bahan_baku]['harga_standar'].iloc[0]
-                    satuan_pembelian = df_daftar_beli[df_daftar_beli['item'] == bahan_baku]['satuan'].iloc[0]
-                    st.markdown(f"**💰 Harga**: Rp {harga_satuan_pembelian:,}/{satuan_pembelian}")
-            
-            qty_pembelian = st.number_input("⚖️ Jumlah", min_value=0, step=1, key="qty_beli_input")
-            total_beli = qty_pembelian * harga_satuan_pembelian
-            st.markdown(f"**🧮 Total**: Rp {total_beli:,.0f}")
-            
-            catatan_beli = st.text_input("📝 Catatan (opsional)")
-            
-            if st.form_submit_button(f"💾 Simpan Pembelian", use_container_width=True):
-                if bahan_baku == "Tambah Item Baru":
-                    if item_pembelian and harga_satuan_pembelian > 0 and satuan_pembelian:
-                        if add_new_purchase_item(item_pembelian, harga_satuan_pembelian, satuan_pembelian):
-                            simpan_transaksi(date.today(), "Pembelian", item_pembelian, qty_pembelian, harga_satuan_pembelian, catatan_beli)
-                            st.success(f"✅ Item '{item_pembelian}' berhasil ditambahkan dan pembelian berhasil disimpan!")
-                            st.rerun()
-                    else:
-                        st.error("❌ Lengkapi semua data untuk item baru!")
-                elif bahan_baku != "-- Pilih Item --" and qty_pembelian > 0:
-                    simpan_transaksi(date.today(), "Pembelian", item_pembelian, qty_pembelian, harga_satuan_pembelian, catatan_beli)
-                    st.success(f"✅ Pembelian {item_pembelian} berhasil disimpan!")
-                    st.rerun()
-                else:
-                    st.error("❌ Pilih item dan masukkan jumlah yang valid!")
-
-    with tab3:
-        st.markdown("### 🥨 Update Stok Produk Jadi")
-        st.info("💡 Gunakan fitur ini untuk menginput stok awal atau memperbarui jumlah stok produk jadi secara manual.")
-        
-        with st.form("form_stok_jadi", clear_on_submit=True):
-            produk_stok = st.selectbox("📦 Produk", list(HARGA_JUAL.keys()))
-            
-            # Ambil stok saat ini
-            stok_saat_ini = st.session_state.inventaris[st.session_state.inventaris['item'] == produk_stok]['qty'].iloc[0]
-            st.info(f"Stok **{produk_stok}** saat ini: **{stok_saat_ini:.0f}** pcs.")
-            
-            qty_stok_baru = st.number_input("⚖️ Jumlah Stok Baru (pcs)", min_value=0, step=1)
-            
-            if st.form_submit_button("💾 Update Stok", use_container_width=True):
-                if update_stok_produk_jadi(produk_stok, qty_stok_baru):
-                    st.success(f"✅ Stok produk **{produk_stok}** berhasil diupdate menjadi **{qty_stok_baru}** pcs!")
-                    st.rerun()
-                else:
-                    st.error("❌ Gagal mengupdate stok.")
-
-
-# Jurnal Umum
-elif menu == "📋 Jurnal Umum":
-    st.markdown("## 📋 Jurnal Umum")
-    
-    if not st.session_state.jurnal.empty:
-        df_jurnal = st.session_state.jurnal.copy()
-        df_jurnal['jumlah'] = pd.to_numeric(df_jurnal['jumlah'])
-        
-        # Hitung total debit dan kredit
-        total_debit = df_jurnal.groupby('debit')['jumlah'].sum().sum()
-        total_kredit = df_jurnal.groupby('kredit')['jumlah'].sum().sum()
-        
-        df_display = df_jurnal.copy()
-        df_display['jumlah'] = df_display['jumlah'].apply(lambda x: f"Rp {x:,.0f}")
-        df_display = df_display.rename(columns={
-            'tanggal': 'Tanggal', 'keterangan': 'Keterangan', 'debit': 'Debit',
-            'kredit': 'Kredit', 'jumlah': 'Jumlah'
-        })
-        
-        st.dataframe(df_display[['Tanggal', 'Keterangan', 'Debit', 'Kredit', 'Jumlah']], 
-                    use_container_width=True, hide_index=True)
-
-        # Tampilkan total
-        st.markdown("---")
-        col_debit, col_kredit = st.columns(2)
-        with col_debit:
-            st.metric("Total Debit", f"Rp {total_debit:,.0f}")
-        with col_kredit:
-            st.metric("Total Kredit", f"Rp {total_kredit:,.0f}")
-        
-        if abs(total_debit - total_kredit) < 0.01:
-            st.success("✅ Neraca Jurnal Seimbang! Total Debit = Total Kredit")
-        else:
-            st.warning(f"⚠️ Neraca Jurnal Tidak Seimbang! Selisih: Rp {abs(total_debit - total_kredit):,.0f}")
-    else:
-        st.info("📝 Belum ada catatan jurnal.")
-
-# Laporan Keuangan
-elif menu == "📈 Laporan Keuangan":
-    st.markdown("## 📈 Laporan Keuangan")
-    
-    if not st.session_state.transaksi.empty:
-        df_transaksi = st.session_state.transaksi.copy()
-        df_transaksi['tanggal'] = pd.to_datetime(df_transaksi['tanggal'])
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            start_date = st.date_input("📅 Dari Tanggal", value=df_transaksi['tanggal'].min().date())
-        with col2:
-            end_date = st.date_input("📅 Sampai Tanggal", value=df_transaksi['tanggal'].max().date())
-        
-        df_filtered = df_transaksi[
-            (df_transaksi['tanggal'].dt.date >= start_date) &
-            (df_transaksi['tanggal'].dt.date <= end_date)
-        ]
-        
-        if not df_filtered.empty:
-            tab1, tab2, tab3 = st.tabs(["📊 Ringkasan", "💰 Detail Penjualan", "🛒 Detail Pembelian"])
-            
-            with tab1:
-                st.markdown("### 📊 Ringkasan Periode")
-                penjualan = df_filtered[df_filtered['jenis'] == 'Penjualan']['total'].sum()
-                pembelian = df_filtered[df_filtered['jenis'] == 'Pembelian']['total'].sum()
-                laba = penjualan - pembelian
-                
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("💰 Penjualan", f"Rp {penjualan:,.0f}")
-                with col2:
-                    st.metric("🛒 Pembelian", f"Rp {pembelian:,.0f}")
-                with col3:
-                    if laba >= 0:
-                        st.metric("📈 Laba", f"Rp {laba:,.0f}")
-                    else:
-                        st.metric("📉 Rugi", f"Rp {abs(laba):,.0f}")
-                
-                st.markdown("### 💹 Laporan Laba Rugi")
-                
-                laporan_lr = [["Pendapatan:", ""], ["  Penjualan Aneka Snack", f"Rp {penjualan:,.0f}"], ["", ""], ["Beban Operasional:", ""]]
-                
-                total_beban = 0
-                df_daftar_beli = st.session_state.daftar_pembelian
-                semua_item_beli = df_daftar_beli['item'].tolist()
-                semua_item_beli.extend(df_filtered[(df_filtered['jenis'] == 'Pembelian') & (~df_filtered['item'].isin(semua_item_beli))]['item'].unique())
-                
-                for item_beli in semua_item_beli:
-                    beban = df_filtered[
-                        (df_filtered['jenis'] == 'Pembelian') & 
-                        (df_filtered['item'] == item_beli)
-                    ]['total'].sum()
-                    if beban > 0:
-                        laporan_lr.append([f"  Biaya {item_beli}", f"Rp {beban:,.0f}"])
-                        total_beban += beban
-                
-                laporan_lr.append(["  Total Beban", f"Rp {total_beban:,.0f}"])
-                laporan_lr.append(["", ""])
-                laporan_lr.append(["Laba Bersih", f"Rp {laba:,.0f}"])
-                
-                df_laporan = pd.DataFrame(laporan_lr, columns=["Keterangan", "Jumlah"])
-                st.dataframe(df_laporan, use_container_width=True, hide_index=True)
-            
-            with tab2:
-                st.markdown("### 💰 Detail Penjualan")
-                df_penjualan = df_filtered[df_filtered['jenis'] == 'Penjualan']
-                
-                if not df_penjualan.empty:
-                    total_qty = df_penjualan['qty'].sum()
-                    total_rupiah = df_penjualan['total'].sum()
-                    
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.metric("📦 Total Produk Terjual", f"{total_qty:.1f} pcs")
-                    with col2:
-                        st.metric("💰 Total Penjualan", f"Rp {total_rupiah:,.0f}")
-                    
-                    df_penjualan_display = df_penjualan[['tanggal', 'item', 'qty', 'total', 'catatan']].copy()
-                    df_penjualan_display['total'] = df_penjualan_display['total'].apply(lambda x: f"Rp {x:,.0f}")
-                    df_penjualan_display.columns = ['Tanggal', 'Produk', 'Qty (pcs)', 'Total', 'Catatan']
-                    st.dataframe(df_penjualan_display, use_container_width=True, hide_index=True)
-                else:
-                    st.info("📝 Tidak ada penjualan dalam periode ini.")
-            
-            with tab3:
-                st.markdown("### 🛒 Detail Pembelian")
-                df_pembelian = df_filtered[df_filtered['jenis'] == 'Pembelian']
-                
-                if not df_pembelian.empty:
-                    ringkasan = df_pembelian.groupby('item').agg({
-                        'qty': 'sum',
-                        'total': 'sum'
-                    }).reset_index()
-                    
-                    st.markdown("**Ringkasan Pembelian:**")
-                    for _, row in ringkasan.iterrows():
-                        st.write(f"• {row['item']}: {row['qty']:.1f} unit = Rp {row['total']:,.0f}")
-                    
-                    st.markdown("---")
-                    
-                    df_pembelian_display = df_pembelian[['tanggal', 'item', 'qty', 'total', 'catatan']].copy()
-                    df_pembelian_display['total'] = df_pembelian_display['total'].apply(lambda x: f"Rp {x:,.0f}")
-                    df_pembelian_display.columns = ['Tanggal', 'Item', 'Qty', 'Total', 'Catatan']
-                    st.dataframe(df_pembelian_display, use_container_width=True, hide_index=True)
-                else:
-                    st.info("📝 Tidak ada pembelian dalam periode ini.")
-        else:
-            st.info("📝 Tidak ada transaksi dalam periode yang dipilih.")
-    else:
-        st.info("📝 Belum ada data transaksi.")
-
-# Neraca Saldo
-elif menu == "⚖️ Neraca Saldo":
-    st.markdown("## ⚖️ Neraca Saldo")
-    
-    if not st.session_state.jurnal.empty:
-        df_jurnal = st.session_state.jurnal.copy()
-        df_jurnal['jumlah'] = pd.to_numeric(df_jurnal['jumlah'])
-        saldo_debit = df_jurnal.groupby('debit')['jumlah'].sum().reset_index()
-        saldo_kredit = df_jurnal.groupby('kredit')['jumlah'].sum().reset_index()
-        
-        saldo_akun = pd.merge(saldo_debit, saldo_kredit, left_on='debit', right_on='kredit', how='outer').fillna(0)
-        saldo_akun['saldo'] = saldo_akun['jumlah_x'] - saldo_akun['jumlah_y']
-        
-        neraca_data = []
-        total_debit = 0
-        total_kredit = 0
-        
-        for _, row in saldo_akun.iterrows():
-            akun = row['debit'] if row['debit'] != 0 else row['kredit']
-            saldo = row['saldo']
-            
-            if saldo >= 0:
-                neraca_data.append([akun, f"Rp {saldo:,.0f}", ""])
-                total_debit += saldo
-            else:
-                neraca_data.append([akun, "", f"Rp {abs(saldo):,.0f}"])
-                total_kredit += abs(saldo)
-        
-        neraca_data.append(["", "---", "---"])
-        neraca_data.append(["TOTAL", f"Rp {total_debit:,.0f}", f"Rp {total_kredit:,.0f}"])
-        
-        df_neraca = pd.DataFrame(neraca_data, columns=["Nama Akun", "Debit", "Kredit"])
-        st.dataframe(df_neraca, use_container_width=True, hide_index=True)
-        
-        if abs(total_debit - total_kredit) < 0.01:
-            st.success("✅ Neraca Seimbang! Total Debit = Total Kredit")
-        else:
-            st.error(f"❌ Neraca Tidak Seimbang! Selisih: Rp {abs(total_debit - total_kredit):,.0f}")
-    else:
-        st.info("📝 Belum ada data untuk neraca saldo.")
-
-# Reset Data
-elif menu == "🗑️ Reset Data":
-    st.markdown("## 🗑️ Reset Data")
-    
-    total_transaksi = len(st.session_state.transaksi)
-    total_jurnal = len(st.session_state.jurnal)
-    
-    st.markdown("### 📊 Informasi Data Saat Ini")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("📝 Total Transaksi", f"{total_transaksi} data")
-    with col2:
-        st.metric("📋 Total Jurnal", f"{total_jurnal} data")
-    
-    if total_transaksi > 0 or total_jurnal > 0:
-        st.markdown("---")
-        st.markdown("### ⚠️ Peringatan")
-        st.warning("""
-        **PERHATIAN!** Tindakan ini akan menghapus SEMUA data transaksi, jurnal, dan mereset stok inventaris menjadi nol secara permanen.
-        
-        Karena saat ini Anda tidak menggunakan database eksternal, data yang hilang tidak bisa dikembalikan.
-        """)
-        
-        if st.button("🗑️ RESET SEMUA DATA", type="primary", use_container_width=True, help="Klik untuk menghapus semua data"):
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            import time
-            status_text.text("🔄 Menghapus data transaksi dan jurnal...")
-            progress_bar.progress(50)
-            time.sleep(0.5)
-            
-            reset_data()
-            status_text.text("✅ Reset data berhasil!")
-            progress_bar.progress(100)
-            time.sleep(1)
-            st.success("🎉 **RESET BERHASIL!** Semua data telah dihapus dan stok telah direset.")
-            st.info("💡 Anda dapat mulai memasukkan data baru melalui menu 'Input Transaksi'.")
-            time.sleep(2)
+                new_item = {'item': item_inv, 'qty': qty_inv, 'satuan': satuan_inv}
+                st.session_state.inventaris = pd.concat([st.session_state.inventaris, pd.DataFrame([new_item])], ignore_index=True)
+            simpan_semua_data()
+            st.success("Inventaris berhasil diupdate!")
             st.rerun()
-    else:
-        st.info("📝 Tidak ada data untuk direset. Database sudah kosong.")
-        st.markdown("💡 Mulai menambahkan data melalui menu 'Input Transaksi'.")
 
-# Kontak Kami
-elif menu == "📞 Kontak Kami":
-    st.markdown("## 📞 Kontak Kami")
-    st.markdown("### Informasi Kontak")
-    st.markdown("Silakan hubungi kami melalui media sosial atau kontak di bawah ini:")
+# --- MENU LAPORAN KEUANGAN ---
+elif menu == "Laporan Keuangan":
+    st.header("📚 Laporan Keuangan Detail")
     
-    col1, col2, col3, col4 = st.columns(4)
+    tab_laba_rugi, tab_neraca, tab_jurnal_detail = st.tabs(["Laporan Laba-Rugi", "Neraca Saldo", "Jurnal Umum"])
     
-    with col1:
-        st.link_button("📸 Instagram", "https://www.instagram.com/ebnu_am", type="secondary", use_container_width=True, help="Follow us on Instagram")
-    
-    with col2:
-        st.link_button("💬 Telegram", "https://t.me/ebnudoang", type="secondary", use_container_width=True, help="Telegram")
-    
-    with col3:
-        st.link_button("📧 Email", "mailto:email_anda@email.com", type="secondary", use_container_width=True, help="Kirim email kepada kami")
+    with tab_laba_rugi:
+        st.subheader("Laporan Laba-Rugi")
         
-    with col4:
-        st.link_button("💼 LinkedIn", "https://www.linkedin.com/in/linkedin_anda", type="secondary", use_container_width=True, help="Kunjungi profil LinkedIn kami")
+        pendapatan_penjualan = st.session_state.transaksi[st.session_state.transaksi['jenis'] == 'Penjualan']['total'].sum()
+        beban_pokok_penjualan = st.session_state.transaksi[st.session_state.transaksi['jenis'] == 'Pembelian']['total'].sum()
+        laba_kotor = pendapatan_penjualan - beban_pokok_penjualan
         
-    st.markdown("""
+        st.write(f"**Pendapatan Penjualan**: Rp{pendapatan_penjualan:,.0f}")
+        st.write(f"**Beban Pokok Penjualan**: Rp{beban_pokok_penjualan:,.0f}")
+        st.markdown("---")
+        st.write(f"**Laba Bersih**: Rp{laba_kotor:,.0f}")
+        
+    with tab_neraca:
+        st.subheader("Neraca Saldo")
+        
+        saldo_kas = st.session_state.jurnal[st.session_state.jurnal['debit'] == 'Kas']['jumlah'].sum() - st.session_state.jurnal[st.session_state.jurnal['kredit'] == 'Kas']['jumlah'].sum()
+        saldo_piutang = st.session_state.jurnal[st.session_state.jurnal['debit'] == 'Piutang Usaha']['jumlah'].sum() - st.session_state.jurnal[st.session_state.jurnal['kredit'] == 'Piutang Usaha']['jumlah'].sum()
+        saldo_bahan_baku = st.session_state.jurnal[st.session_state.jurnal['debit'] == 'Bahan Baku']['jumlah'].sum() - st.session_state.jurnal[st.session_state.jurnal['kredit'] == 'Bahan Baku']['jumlah'].sum()
+        saldo_utang = st.session_state.jurnal[st.session_state.jurnal['kredit'] == 'Utang Usaha']['jumlah'].sum() - st.session_state.jurnal[st.session_state.jurnal['debit'] == 'Utang Usaha']['jumlah'].sum()
+        
+        total_aset = saldo_kas + saldo_piutang + saldo_bahan_baku
+        total_kewajiban_ekuitas = saldo_utang + laba_kotor
+        
+        st.markdown(f"""
+        ### **Aset: Rp{total_aset:,.0f}**
+        <p>Kas: Rp{saldo_kas:,.0f}</p>
+        <p>Piutang Usaha: Rp{saldo_piutang:,.0f}</p>
+        <p>Bahan Baku (Inventaris): Rp{saldo_bahan_baku:,.0f}</p>
+        
         <br>
-        **Catatan**: Silakan ganti placeholder `instagram_anda`, `nomor_whatsapp_anda`, `email_anda@email.com`, dan `linkedin_anda` 
-        dengan informasi kontak yang sesuai.
-    """, unsafe_allow_html=False)
+        
+        ### **Kewajiban & Ekuitas: Rp{total_kewajiban_ekuitas:,.0f}**
+        <p>Utang Usaha: Rp{saldo_utang:,.0f}</p>
+        <p>Ekuitas (Laba): Rp{laba_kotor:,.0f}</p>
+        """, unsafe_allow_html=True)
+        
+    with tab_jurnal_detail:
+        st.subheader("Jurnal Umum Detail")
+        st.dataframe(st.session_state.jurnal, use_container_width=True)
+        
+# --- MENU PENGATURAN HARGA ---
+elif menu == "Pengaturan Harga":
+    st.header("⚙️ Pengaturan Harga Produk")
+    st.write("Anda bisa mengubah harga jual produk di sini. Perubahan akan tersimpan otomatis.")
 
+    if st.button("🔄 Muat Ulang Data Harga"):
+        st.session_state.transaksi, st.session_state.jurnal, st.session_state.inventaris, st.session_state.harga_jual = init_data_from_gsheets()
+        st.rerun()
+    
+    st.markdown("---")
+    
+    if st.session_state.harga_jual:
+        for item, harga in st.session_state.harga_jual.items():
+            st.session_state.harga_jual[item] = st.number_input(f"Harga Jual {item}", value=harga, min_value=0)
+    else:
+        st.warning("Tidak ada data harga jual yang ditemukan. Silakan tambahkan produk di sheet 'settings'.")
+
+    if st.button("Simpan Perubahan Harga"):
+        simpan_semua_data()
+        st.success("Harga berhasil diupdate!")
+
+# --- MENU KONTAK ---
+elif menu == "Kontak":
+    st.header("📞 Kontak Aneka Snack")
+    
+    st.markdown("### Hubungi Kami untuk Informasi Lebih Lanjut atau Pemesanan!")
+    
+    col_kontak1, col_kontak2 = st.columns(2)
+    with col_kontak1:
+        st.subheader("WhatsApp")
+        st.markdown("[Klik untuk Chat](https://wa.me/6281234567890)")
+        st.subheader("Instagram")
+        st.markdown("[@AnekaSnackOfficial](https://www.instagram.com/AnekaSnackOfficial/)")
+
+    with col_kontak2:
+        st.subheader("Telegram")
+        st.markdown("[Telegram Channel](https://t.me/AnekaSnack)")
+        st.subheader("LinkedIn")
+        st.markdown("[LinkedIn Page](https://www.linkedin.com/company/AnekaSnack)")
