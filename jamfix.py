@@ -439,13 +439,14 @@ elif menu == "Kontak":
     
     col_kontak1, col_kontak2 = st.columns(2)
     with col_kontak1:
-        st.subheader("WhatsApp")
-        st.markdown("[Klik untuk Chat](https://wa.me/6281234567890)")
+        st.subheader("Telegram")
+        st.markdown("[Klik untuk Chat](https://t.me/ebnudoang)")
         st.subheader("Instagram")
-        st.markdown("[@AnekaSnackOfficial](https://www.instagram.com/AnekaSnackOfficial/)")
+        st.markdown("[@AnekaSnackOfficial](https://www.instagram.com/ebnu_am/)")
 
     with col_kontak2:
         st.subheader("Telegram")
-        st.markdown("[Telegram Channel](https://t.me/AnekaSnack)")
+        st.markdown("[Telegram Channel](https://t.me/)")
         st.subheader("LinkedIn")
         st.markdown("[LinkedIn Page](https://www.linkedin.com/company/AnekaSnack)")
+
