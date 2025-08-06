@@ -170,7 +170,7 @@ def tambah_transaksi_pembelian():
     st.success("Pembelian berhasil dicatat!")
 
 # --- SIDEBAR & NAVIGASI ---
-st.sidebar.image("unnamed (2) (1).jpg", use_column_width=True)
+st.sidebar.image("logo aneka snack.jpg", use_column_width=True)
 st.sidebar.title("Menu Utama")
 menu = st.sidebar.radio("Pilih Menu:", ["Dashboard", "Catat Transaksi", "Inventaris", "Laporan Keuangan", "Pengaturan Harga", "Kontak"])
 
@@ -446,3 +446,4 @@ elif menu == "Kontak":
                 <p style="font-size:24px;">💼 LinkedIn Page</p>
             </a>
         """, unsafe_allow_html=True)
+
